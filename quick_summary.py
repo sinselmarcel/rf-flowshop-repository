@@ -6,8 +6,8 @@ Extended quick_summary:
   1) out/kpi_runs_<subset>.csv                 (run-level: scenario×policy×seed)
   2) out/quick_summary_<subset>.csv            (backwards-compatible means for main KPIs)
   3) out/kpi_stats_<subset>.csv                (mean/median/std/q25/q75/min/max per scenario×policy)
-  4) out/wins_ranks_<subset>.csv               (wins + avg rank per KPI like your Table 6-2)
-  5) out/ml_vs_best_heur_<subset>.csv          (ML vs best heuristic per scenario, incl. Δ% “improvement”)
+  4) out/wins_ranks_<subset>.csv               (wins + avg rank per KPI)
+  5) out/ml_vs_best_heur_<subset>.csv          (ML vs best heuristic per scenario)
   6) out/factor_delta_<subset>.csv             (Δ% aggregated by due/dist/K for sensitivity)
 """
 
@@ -29,7 +29,6 @@ POLICIES = {"SPT", "EDD", "ATC", "ML"}
 TRAIN_SEEDS = {"42", "1337", "2025", "2601", "31415", "2718", "73", "99", "808", "111"}
 TEST_SEEDS  = {"222", "333", "444", "555", "666", "777", "888", "999", "1212", "1717"}
 
-# KPIs you currently use in Chapter 6 tables (keep names consistent with kpi_summary.json)
 MAIN_KPIS = {
     "on_time_rate": "ontime",
     "tardiness_p95": "tard_p95",
@@ -41,8 +40,8 @@ MAIN_KPIS = {
     "throughput_per_min": "thr_per_min",
 }
 
-# Define for ranking/delta which KPIs are "maximize" vs "minimize"
-# (positive Δ% should mean "ML better" in both cases)
+# Defining for ranking/delta which KPIs are "maximize" vs "minimize"
+# (positive Δ% means "ML (RF) better" in both cases)
 MAXIMIZE_KPIS = {"on_time_rate", "throughput_per_min"}
 MINIMIZE_KPIS = {"tardiness_p95", "ct_mean", "ct_p95", "wip_avg", "wip_max"}  # ct_p50 not used for ranks by default
 
@@ -103,7 +102,7 @@ def quantile_agg(q: float):
 # -----------------------------
 def compute_wins_ranks(df_mean: pd.DataFrame) -> pd.DataFrame:
     """
-    df_mean: rows are scenario×policy with mean KPI columns (original KPI names).
+    df_mean: rows are scenario×policy with mean KPI columns.
     Output: one row per KPI with wins and avg rank per policy.
     """
     policies_present = sorted(df_mean["policy"].unique().tolist(), key=lambda x: ["SPT","EDD","ATC","ML"].index(x) if x in ["SPT","EDD","ATC","ML"] else 999)
@@ -115,12 +114,10 @@ def compute_wins_ranks(df_mean: pd.DataFrame) -> pd.DataFrame:
 
         # rank per scenario (lower rank=better)
         ascending = (kpi in MINIMIZE_KPIS)  # minimize => ascending=True
-        # optional: stabilisiert Throughput-Ties (empfohlen)
         if kpi == "throughput_per_min":
             pivot = pivot.round(5)
 
         ranks = pivot.rank(axis=1, method="min", ascending=ascending)
-
 
         # wins: count best in each scenario (handle ties by counting all with rank==1)
         wins = (ranks == 1).sum(axis=0)
@@ -207,7 +204,6 @@ def compute_factor_delta(delta_wide: pd.DataFrame) -> pd.DataFrame:
 
     delta_cols = [c for c in df.columns if c.endswith("__delta_pct")]
 
-    # long format for easy groupby
     long = df.melt(
         id_vars=["scenario", "util", "due", "K", "dist"],
         value_vars=delta_cols,
@@ -216,7 +212,7 @@ def compute_factor_delta(delta_wide: pd.DataFrame) -> pd.DataFrame:
     )
     long["kpi"] = long["kpi"].str.replace("__delta_pct", "", regex=False)
 
-    # group by each factor separately (plus combined if you want)
+    # grouped by each factor separately
     by_due = long.groupby(["kpi", "due"]).agg(
         n=("delta_pct", "count"),
         mean=("delta_pct", "mean"),
@@ -254,14 +250,13 @@ def compute_factor_delta(delta_wide: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runs_dir", default="runs", help="Basisordner mit Runs (default: runs)")
-    parser.add_argument("--out_dir", default="out", help="Output-Ordner (default: out)")
+    parser.add_argument("--runs_dir", default="runs", help="Base folder containing runs (default: runs)")
+    parser.add_argument("--out_dir", default="out", help="Output folder (default: out)")
     parser.add_argument(
         "--subset",
         choices=["all", "train", "test"],
         default="all",
-        help="Welche Seeds sollen in die Auswertung einfließen?"
-    )
+        )
     args = parser.parse_args()
 
     runs_dir = Path(args.runs_dir)
@@ -272,9 +267,6 @@ def main() -> None:
 
     for kpi_path in runs_dir.rglob(KPI_FILE):
         parts = kpi_path.parts
-
-        # Scenario: folder directly under runs_dir (relative)
-        # We keep your old logic, but more robust:
         try:
             rel = kpi_path.relative_to(runs_dir)
         except ValueError:
@@ -316,7 +308,7 @@ def main() -> None:
         rows.append(row)
 
     if not rows:
-        raise SystemExit("Keine KPI-Daten gefunden – stimmt runs_dir / Dateiname (kpi_summary.json)?")
+        raise SystemExit("No KPI data found")
 
     df = pd.DataFrame(rows)
 
@@ -334,24 +326,24 @@ def main() -> None:
     to_excel_csv(df, runs_path)
 
     # ------------------------------------------------------------
-    # 2) Backwards-compatible mean summary (your old quick_summary.csv)
+    # 2) Backwards-compatible mean summary
     # ------------------------------------------------------------
-    # ensure all columns exist
+
     agg_dict = {}
     for src, outname in MAIN_KPIS.items():
         if src in df.columns:
             agg_dict[outname] = (src, "mean")
         else:
-            # keep missing cols as NaN later
+            # keep missing cols as NaN
             pass
 
-    # Keep n as mean (as before)
+    # Keep n as mean
     if "n" in df.columns:
         agg_dict["n"] = ("n", "mean")
 
     summary = df.groupby(["scenario", "policy"]).agg(**agg_dict).reset_index()
 
-    # if some MAIN_KPIS missing, add them as NaN columns for stable downstream Excel formulas
+    # if some MAIN_KPIS missing, theyre added as NaN columns
     for outname in MAIN_KPIS.values():
         if outname not in summary.columns:
             summary[outname] = float("nan")
@@ -372,8 +364,7 @@ def main() -> None:
         n_seeds=("ct_mean", "count") if "ct_mean" in df.columns else (kpi_num_cols[0], "count"),
         mean=("ct_mean", "mean") if "ct_mean" in df.columns else (kpi_num_cols[0], "mean"),
     )
-    # Replace placeholder mean later by expanding manually for each col
-    # We'll build a multi-stat table in long form first (cleaner)
+
 
     stats_rows = []
     for (sc, pol), g in grouped:
@@ -403,8 +394,8 @@ def main() -> None:
     to_excel_csv(kpi_stats, stats_path)
 
     # ------------------------------------------------------------
-    # 4) Wins & Average Rank (like your Table 6-2)
-    #    Use scenario×policy means in ORIGINAL KPI names (not renamed)
+    # 4) Wins & Average Rank
+    #    Uses scenario×policy means in ORIGINAL KPI names
     # ------------------------------------------------------------
     # build df_mean with original KPI names (means over seeds)
     mean_cols = [c for c in RANK_KPIS if c in df.columns]
