@@ -8,19 +8,19 @@ DATA = Path("out") / "ml_dataset_labeled.parquet"
 MODELS = Path("models"); MODELS.mkdir(parents=True, exist_ok=True)
 
 
-# ---- Laden
+# ---- Load
 P_PARQ = Path("out/ml_dataset_labeled.parquet")
 P_CSV  = Path("out/ml_dataset_labeled.csv")
 df = pd.read_parquet(P_PARQ) if P_PARQ.exists() else pd.read_csv(P_CSV)
 
-# --- Grundreinigung: NaNs/Inf raus
+# --- Deep cleaning: Remove NaNs/Inf
 target = "y_rct"
 features = [
     "machine","p_i","rest_from_i","rest_downstream","slack","age",
     "queue_len_m","q_len_total","on_floor","wip_cap","tau","phi"
 ]
 
-# nur komplette Zeilen verwenden
+# Use only complete lines
 df = df.replace([np.inf, -np.inf], np.nan)
 before = len(df)
 df = df.dropna(subset=[target] + features).copy()
@@ -32,20 +32,20 @@ target = "y_rct"
 features = [
     "machine","p_i","rest_from_i","rest_downstream","slack","age",
     "queue_len_m","q_len_total","on_floor","wip_cap","tau","phi",
-    # Szenariofeatures:
+    # Scenario Features:
     "due_tight","dist_high","rho_set","K","bn_workload_now"
 ]
 X = df[features].copy()
 y = df[target].astype("float32")
 groups = df["run_id"]
 
-# ---- Train/Test-Split nach run_id (keine Leaks über gleiche Runs)
+# ---- Train/Test split by run_id
 gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
 train_idx, test_idx = next(gss.split(X, y, groups=groups))
 Xtr, Xte = X.iloc[train_idx], X.iloc[test_idx]
 ytr, yte = y.iloc[train_idx], y.iloc[test_idx]
 
-# ---- Modell + grobes Tuning
+# ---- Model + tuning
 base = RandomForestRegressor(
     n_estimators=400, max_depth=12, min_samples_leaf=8, n_jobs=-1, random_state=42
 )
@@ -62,12 +62,12 @@ search = RandomizedSearchCV(
 search.fit(Xtr, ytr)
 model = search.best_estimator_
 
-# ---- Bewertung
+# ---- Rating
 pred = model.predict(Xte)
 mae = mean_absolute_error(yte, pred)
 r2  = r2_score(yte, pred)
 print(f"[y_rct] MAE={mae:.2f}  R2={r2:.3f}  (best_params={search.best_params_})")
 
-# ---- Speichern (+ Featureliste)
+# ---- Save (+ Feature List)
 joblib.dump({"model": model, "features": features}, MODELS / "model_rct.pkl")
 print("[OK] models/model_rct.pkl")
