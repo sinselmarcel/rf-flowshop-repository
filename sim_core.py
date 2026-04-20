@@ -4,9 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from policy_ml import build_candidates, choose_job
 
-
-# ---------- Hilfen ----------
-rngs = {}  # getrennte RNG-Streams
+rngs = {}  # Separate RNG streams
 def set_seeds(base_seed=42):
     global rngs
     rngs = {
@@ -25,7 +23,7 @@ def gamma_from_mean_cv(mean, cv, size=None, rng=None):
 def atc_score(p_i, slack, tau, k):
     return np.exp(-max(0.0, slack)/(k * max(tau, 1e-9))) / max(p_i, 1e-9)
 
-# ---------- Datenstrukturen ----------
+# ---------- Data Structures ----------
 @dataclass
 class Job:
     jid: int
@@ -39,20 +37,18 @@ class Job:
     def __post_init__(self):
         self.start_times, self.end_times = [], []
 
-# ---------- Ressourcen ----------
+# ---------- Resources ----------
 class Machine:
     def __init__(self, env, name):
         self.env = env
         self.name = name
         self.res = simpy.Resource(env, capacity=1)
         self.queue = []
-        # NEU: aktuell in Bearbeitung
         self.current_job = None
         self.current_start = None
         self.current_ptime = None
-        self.is_up = True                 # NEU: Maschinenzustand
-        self.proc_handle = None           # NEU: Referenz auf laufenden Bearbeitungsprozess (Timeout)
-
+        self.is_up = True                
+        self.proc_handle = None           
 
 class WLCGate:
     def __init__(self, cap):
@@ -64,24 +60,23 @@ class WLCGate:
 
 # ---------- Shop ----------
 class FlowShop3:
-    # ---- Auto-Cap Helfer ----
+    # ---- Auto-Cap Helper ----
     def _compute_means_for_cap(self):
         m1, m2, m3 = map(float, self.cfg["processing_times"]["mean"])
         return m1, m2, m3
 
     def _auto_cap(self):
-        """Cap = beta * E[P] / p_BN  (mit optionalen min/max-Klemmen)."""
+        """Cap = beta * E[P] / p_BN"""
         cap_cfg = self.cfg.get("wlc", {}).get("cap", {})
         beta = float(cap_cfg.get("beta", 3.5))
         m1, m2, m3 = self._compute_means_for_cap()
         means = [m1, m2, m3]
-        p_bn = max(means)               # Engpass = größtes Mittel
+        p_bn = max(means)               # Bottleneck = highest mean
         E_P  = sum(means)               # E[P] = m1+m2+m3
         cap  = int(round(beta * (E_P / p_bn)))
-        # optional min/max klemmen
         if "min" in cap_cfg: cap = max(int(cap_cfg["min"]), cap)
         if "max" in cap_cfg: cap = min(int(cap_cfg["max"]), cap)
-        # für Logging/Export merken
+      
         self._cap_auto_meta = {
             "beta": beta, "m1": m1, "m2": m2, "m3": m3,
             "E_P": E_P, "p_BN": p_bn, "BN": 1 + int(means.index(p_bn)),
@@ -90,7 +85,7 @@ class FlowShop3:
         return cap
     
     def _bn_index(self):
-        """Index des Engpasses nach Mittelwerten (0/1/2)."""
+        """Bottleneck index based on average values (0/1/2)."""
         m1, m2, m3 = self._compute_means_for_cap()
         means = [m1, m2, m3]
         return int(np.argmax(means))
@@ -98,21 +93,18 @@ class FlowShop3:
 
     def _workload_cap_minutes(self):
         norm = self.cfg.get("wlc", {}).get("norm", {})
-        K = float(norm.get("K", norm.get("beta", 4.5)))  # K = Szenariohebel
+        K = float(norm.get("K", norm.get("beta", 4.5)))  # K = Scenario lever
         m1, m2, m3 = self._compute_means_for_cap()
         p_bn = max([m1, m2, m3])
         m_bn = int(self.cfg["shop"].get("bn_servers", 1))
-        wl_cap = K * p_bn * m_bn          # (Minuten-Cap am BN)
+        wl_cap = K * p_bn * m_bn          # (Minute cap at BN)
         return wl_cap
-
-
 
     def _bn_workload_minutes(self):
         """
-        BN-Workload in Minuten:
-        - Alle freigegebenen Jobs, die BN noch vor sich haben: + p_bn
-        - Laufender Job an BN: + Restzeit auf BN
-        - (Optional) laufende Jobs vor BN: + p_bn (konservativ)
+        BN workload in minutes:
+        - All queued jobs still pending on BN: + p_bn
+        - Job currently running on BN: + remaining time on BN
         """
         bn = self._bn_index()
         wl = 0.0
@@ -121,14 +113,14 @@ class FlowShop3:
             for j in m.queue:
                 if (j.release_time is not None) and (j not in self.jobs_done) and (j.op <= bn):
                     wl += j.p[bn]
-        # Laufender Job an BN
+        # Job currently running on BN
         m_bn = self.M[bn]
         cj = m_bn.current_job
         if cj is not None and cj.op == bn:
             elapsed = self.env.now - (m_bn.current_start or self.env.now)
             remaining = max((m_bn.current_ptime or 0.0) - max(elapsed, 0.0), 0.0)
             wl += remaining
-        # laufende Jobs vor BN
+        # Current jobs before BN
         for k in range(bn):
             m_up = self.M[k]
             cj = m_up.current_job
@@ -141,19 +133,19 @@ class FlowShop3:
         self.env = simpy.Environment()
         self.M = [Machine(self.env, f"M{i+1}") for i in range(3)]
 
-        # --- WLC aktiv & Cap bestimmen (Auto-Cap unterstützt) ---
+        # --- Determine Active WLC and Cap ---
         wlc_cfg = cfg.get("wlc", {})
         self.wlc_enabled = bool(wlc_cfg.get("enabled", True))
         cap_field = wlc_cfg.get("cap", {})
 
         if isinstance(cap_field, dict) and cap_field.get("mode") == "auto":
-            cap = self._auto_cap()  # <-- Formel: beta * E[P] / p_BN
+            cap = self._auto_cap()  # beta * E[P] / p_BN
         elif isinstance(cap_field, dict) and "value" in cap_field:
             cap = int(cap_field["value"])
         elif isinstance(cap_field, (int, float)):
             cap = int(cap_field)
         else:
-            # Backwards-kompatibel (rho_0_80/95)
+            # Backward compatible (rho_0_80/95)
             arr = cfg.get("arrival", {})
             rho_list = arr.get("rho_levels", [0.80])
             rho = rho_list[0] if isinstance(rho_list, (list, tuple)) and rho_list else 0.80
@@ -161,37 +153,37 @@ class FlowShop3:
             cap = int(cf.get("rho_0_80", 12)) if abs(rho - 0.80) < 0.1 else int(cf.get("rho_0_95", 18))
 
         if not self.wlc_enabled:
-            cap = 10**9  # praktisch unendlich (WLC aus)
+            cap = 10**9  # practically infinite (WLC off)
 
         self.wlc = WLCGate(cap)
-        self._wip_timeline = [(0.0, 0)]  # (zeit, on_floor)
+        self._wip_timeline = [(0.0, 0)]  # (time, on_floor)
 
         # --- WLC / Pool-Logging ---
-        self.wlc_blocks = 0                   # wie oft ein Release am Cap scheitert
-        self._pool_timeline = [(0.0, 0)]      # (zeit, |jobs_pool|)
+        self.wlc_blocks = 0                   # how often a release fails at the cap
+        self._pool_timeline = [(0.0, 0)]      # (time, jobs_pool)
 
         # Logs / Settings
         self.jobs_pool, self.jobs_done = [], []
         self.logs = {"job": [], "events": [], "scores": []}
         # --- Störungs-KPIs sammeln ---
         self._fail_counts   = [0, 0, 0]
-        self._down_start    = [None, None, None]   # Startzeit eines laufenden Downs je M
-        self._down_minutes  = [0.0, 0.0, 0.0]      # kumulierte Downtime je M
-        self._interrupts    = [0, 0, 0]            # wie oft Job wirklich unterbrochen wurde
-        self._last_fail_end = [0.0, 0.0, 0.0]  # Zeitpunkt des letzten FAIL_END je Maschine
+        self._down_start    = [None, None, None]   # Start time of a running down per machine
+        self._down_minutes  = [0.0, 0.0, 0.0]      # Cumulative downtime per machine
+        self._interrupts    = [0, 0, 0]            # how often the job was actually interrupted
+        self._last_fail_end = [0.0, 0.0, 0.0]  # Time of the last FAIL_END per machine
 
         # ML / Decision-Logging
         self.decision_id = 0
         self.logs["ml_rows"] = []
 
-        # Maschinen-Busyzeit (für Utilization)
+        # Machine busy time (for utilization)
         self._busy_time = [0.0, 0.0, 0.0]
 
         self.verbose = bool(self.cfg.get("logging", {}).get("verbose", False))
         self.max_print = int(self.cfg.get("logging", {}).get("max_print", 0))
         self._print_count = 0
 
-      # ATC-Parameter (liest k ODER k_grid[0])
+      # ATC parameter (reads k OR k_grid[0])
         atc_cfg = cfg.get("policies", {}).get("atc", {})
         if "k" in atc_cfg:
             self.atc_k = float(atc_cfg["k"])
@@ -200,26 +192,25 @@ class FlowShop3:
         else:
             self.atc_k = 2.0  # Default
 
-        # ins Meta-Log schreiben, damit du siehst, was verwendet wurde
         self.logs.setdefault("meta", [{}])
         self.logs["meta"][0]["atc_k"] = float(self.atc_k)
 
 
-        # --- Arrival-Prozess je Modus ---
+        # --- Arrival process by mode ---
         mode = self.cfg.get("mode", {}).get("run", "generator")
         self.env.process(self.arrivals_poisson())
 
-        # Maschinenprozesse
+        # Machine processes
         for i in range(3):
             self.env.process(self.machine_runner(i))
 
-         # Periodisches Top-up des WLC-Gates (neutral, vermeidet Null-Queues)
+         # Periodic top-up of the WLC gate (neutral, prevents zero queues)
         self.env.process(self.wlc_topup(
             period=self.cfg.get("wlc", {}).get("topup_period", 2.0)
         ))
 
   
-        # --- NEU: Failure-Prozesse je Maschine ---
+        # --- Failure rates per machine ---
         dist_cfg = self.cfg.get("disturbances", {})
         self.dist_enabled = bool(dist_cfg.get("enabled", False))
         self.scen_dist = str(self.cfg.get("scenario", {}).get("dist", "off")).lower()
@@ -232,7 +223,7 @@ class FlowShop3:
             self.bkd_cfg = {}
 
    
-        # Optional: Auto-Cap Info direkt ausgeben
+        # Display Auto-Cap information directly
         if hasattr(self, "_cap_auto_meta") and self.verbose:
             meta = self._cap_auto_meta
             print(
@@ -244,24 +235,23 @@ class FlowShop3:
         self.warmup_min = 0.0
 
 
-
     def failure_process(self, idx):
         """
-        Erzeugt zyklisch Ausfälle an Maschine idx:
-        - Ziehe TTF ~ Exp(MTTF), setze is_up=False, logge FAIL_START, interrupt falls Job läuft
-        - Reparatur MTTR, dann is_up=True, logge FAIL_END
+        Causes periodic failures on machine idx:
+        - Set TTF to ~ Exp(MTTF), set is_up=False, log FAIL_START, interrupt if job is running
+        - Repair (MTTR), then set is_up=True, log FAIL_END
         """
         m = self.M[idx]
-        level = self.scen_dist  # "low" oder "high"
+        level = self.scen_dist  # "low" or "high"
         mttf = float(self.bkd_cfg[level]["mttf"])
         mttr = float(self.bkd_cfg[level]["mttr"])
 
         while True:
-            # Zeit bis zum nächsten Ausfall
+            # Time until the next disturbance
             ttf = rngs["failures"].exponential(mttf)
             yield self.env.timeout(ttf)
 
-            # Ausfall beginnt
+            # disturbance begins
             self._fail_counts[idx] += 1
             m.is_up = False
             self._down_start[idx] = self.env.now
@@ -271,20 +261,20 @@ class FlowShop3:
                                         "machine": idx+1,
                                         "job": (m.current_job.jid if m.current_job else None)})
             
-            # Laufenden Job (Timeout) unterbrechen, wenn vorhanden
+            # Interrupt the current job
             if m.proc_handle is not None and getattr(m.proc_handle, "alive", True):
                 try:
                     m.proc_handle.interrupt()
                 except Exception:
-                    pass  # falls schon fertig
+                    pass  # if it's already done
 
-            # Reparatur
+            # Repair
             ttr = rngs["failures"].exponential(mttr)
             yield self.env.timeout(ttr)
 
-            # Ausfall endet
+            # The disturbance ends
             m.is_up = True
-            # Downtime addieren
+            # Add downtime
             if self._down_start[idx] is not None:
                 self._down_minutes[idx] += (self.env.now - self._down_start[idx])
                 self._down_start[idx] = None
@@ -301,16 +291,16 @@ class FlowShop3:
         if isinstance(cv, (int, float)):
             cv = [cv, cv, cv]
 
-        rho = self.cfg["arrival"]["rho_levels"][0]           # Zielauslastung BN
+        rho = self.cfg["arrival"]["rho_levels"][0]           
 
-        # --- BN & λ bestimmen ---
-        bn   = self.cfg["shop"]["bottleneck_machine"] - 1   # z.B. 2 -> Index 1
+        # --- determine BN & λ ---
+        bn   = self.cfg["shop"]["bottleneck_machine"] - 1   # Index machine
         p_bn = float(self.cfg["processing_times"]["mean"][bn])
         m_bn = int(self.cfg["shop"].get("bn_servers", 1))
-        lam_per_min = (rho * m_bn) / p_bn  # Jobs/Minute
+        lam_per_min = (rho * m_bn) / p_bn  # Jobs/minute
 
-        # --- Meta-Log einmalig ---
-        wl_cap = self._workload_cap_minutes()  # liefert Cap in Minuten
+        # --- Meta-Log ---
+        wl_cap = self._workload_cap_minutes()  # Cap delivers in minutes
         self.logs.setdefault("meta", []).append({
             "rho_set": rho,
             "bn_index": bn,
@@ -320,7 +310,6 @@ class FlowShop3:
             "wlc_cap_minutes": wl_cap
         })
         print(f"[INIT] ρ={rho:.2f}, λ={lam_per_min:.4f}/min, BN μ={p_bn:.2f} min, m_bn={m_bn}, Cap={wl_cap:.1f} min")
-
 
 
         jid = 0
@@ -350,26 +339,25 @@ class FlowShop3:
             self.try_release_from_pool()
     
     def _note_wip(self):
-        """Zeit/Level aufnehmen, wenn sich on_floor ändert."""
+        """Record time/level when on_floor changes."""
         self._wip_timeline.append((self.env.now, self.wlc.on_floor))
         
     def _note_pool_wip(self):
-        """Zeit/Level aufnehmen, wenn sich die Poolgröße ändert."""
+        """Record time/level when the pool size changes."""
         self._pool_timeline.append((self.env.now, len(self.jobs_pool)))
 
     def wlc_topup(self, period=2.0):
-        """Periodisches Nachfüllen durch das Gate – hält Queues stabil, ohne Sequencing vorzuprägen."""
+        """Periodic replenishment through the gate – keeps queues stable without predetermining the sequence."""
         while True:
             yield self.env.timeout(period)
             self.try_release_from_pool()
 
     
-    # ----- WLC-Freigabe -----
+    # ----- WLC-Approval -----
     def try_release_from_pool(self):
         """
-        WLC-Release: Standard = neutral (FIFO) und optional Workload-Norm am Engpass.
-        Falls wlc.mode == "workload": frei bis WL(BN) < WL_cap (Minuten).
-        Sonst: fallback auf Stück-Cap (deine bisherige Logik via self.wlc).
+        WLC-Release: Standard = neutral (FIFO).
+        wlc.mode == "workload": Available until WL(BN) < WL_cap (minutes).
         """
         mode = self.cfg.get("wlc", {}).get("mode", None)
         wl_cap = self._workload_cap_minutes() if mode == "workload" else None
@@ -378,15 +366,15 @@ class FlowShop3:
             if not self.wlc_enabled:
                 return True
             if wl_cap is None:
-                # Fallback: Stück-Cap (deine bisherige Logik)
+                # Fallback
                 return self.wlc.can_release()
-            # Workload-Norm (BN-Minuten)
+            # Workload-Norm (BN-Minutes)
             return self._bn_workload_minutes() < wl_cap
 
         while can_release_more() and self.jobs_pool:
             t = self.env.now
 
-            # Pool-Regel: neutral halten (FIFO) für faire Heuristik-Benchmarks
+            # Pool rule: keep neutral (FIFO) for fair heuristic benchmarks
             pool_rule = (
                 self.cfg.get("wlc", {}).get("cap", {}).get("pool_rule") or
                 self.cfg.get("wlc", {}).get("pool_rule") or
@@ -402,7 +390,7 @@ class FlowShop3:
                 return min(self.jobs_pool, key=lambda jj: jj.due - t - rest_from_op(jj))
 
             def pick_align():
-                # Falls du bewusst „vorgeformt“ vergleichen willst (nicht neutral)
+                # OPTIONAL
                 if dispatch_rule == "SPT":
                     return min(self.jobs_pool, key=lambda jj: jj.p[jj.op])
                 elif dispatch_rule == "EDD":
@@ -430,7 +418,7 @@ class FlowShop3:
             else:
                 j = pick_min_slack()
 
-            # Freigeben
+            # Share
             self.jobs_pool.remove(j)
             self._note_pool_wip()
             self.wlc.on_release()
@@ -439,11 +427,10 @@ class FlowShop3:
             self.logs["events"].append({"time": t, "event": "release", "job": j.jid})
             self.M[0].queue.append(j)
 
-            # Bei Workload-Norm: nach jedem Release prüfen und ggf. stoppen
             if wl_cap is not None and self._bn_workload_minutes() >= wl_cap:
                 break
         
-        # am Ende: wenn noch Jobs im Pool sind, aber Cap zu ist → Block zählen
+        # Finally: if there are still jobs in the pool but the cap is full → count the block
         if self.wlc_enabled and wl_cap is not None and self.jobs_pool and (not can_release_more()):
             self.wlc_blocks += 1
             self.logs["events"].append({
@@ -462,13 +449,13 @@ class FlowShop3:
         def rest_from_i(j): 
             return sum(j.p[idx:])
 
-        # Kandidatenliste für Logging
+        # List of candidates for Logging
         cand = []
         for j in q:
             cand.append({"job": j.jid, "p_i": j.p[idx], "due": j.due,
                         "slack": j.due - t - rest_from_i(j)})
 
-        # -------- Auswahl per Regel --------
+        # -------- Selection by rule --------
         if rule == "SPT":
             selected = min(q, key=lambda j: j.p[idx])
             for c in cand: 
@@ -536,14 +523,14 @@ class FlowShop3:
 
 
         
-        # -------- ML-Datensatz pro Kandidat --------
+        # -------- ML dataset per candidate --------
         decision_id = self.decision_id; self.decision_id += 1
         q_len = len(q)
         on_floor = self.wlc.on_floor
         wip_cap = self.wlc.cap
         tau_for_log = (np.mean([jj.p[idx] for jj in q]) if q else
                     self.cfg.get("processing_times", {}).get("mean", [10,10,10])[idx])
-        policy_str = rule  # fürs Log fixieren
+        policy_str = rule
         t_now = self.env.now
 
         level = str(getattr(self, "scen_dist", "off"))
@@ -574,7 +561,7 @@ class FlowShop3:
                 "on_floor": on_floor,
                 "wip_cap": wip_cap,
                 "tau": tau_for_log,
-                # --- Szenario & Störungen ---
+                # --- Scenarios & Disturbances ---
                 "scenario_due": str(self.cfg.get("scenario", {}).get("due", "")),
                 "scenario_dist": level,
                 "rho_set": float(self.logs.get("meta",[{}])[0].get("rho_set",
@@ -606,7 +593,7 @@ class FlowShop3:
         return selected
 
 
-    # ----- Maschinen -----
+    # ----- Machines -----
     def machine_runner(self, idx):
         m = self.M[idx]
         while True:
@@ -628,10 +615,10 @@ class FlowShop3:
                 
                 
                 remaining = ptime
-                proc_busy = 0.0  # echte Bearbeitungszeit (ohne Ausfallzeiten)
+                proc_busy = 0.0  # actual processing time (excluding downtime)
 
                 while remaining > 1e-9:
-                    # wenn Maschine down, erst warten bis up
+                    # If the machine is down, wait until it's back up
                     while not m.is_up:
                         yield self.env.timeout(0.1)
 
@@ -643,28 +630,28 @@ class FlowShop3:
                         proc_busy += delta
                         remaining = 0.0
                     
-                        # Busy nur nach Warm-up in _busy_time zählen
+                        # Count “busy” only after warm-up in _busy_time
                         start_seg = max(t_before, self.warmup_min)
                         end_seg   = self.env.now
                         if end_seg > start_seg:
                             self._busy_time[idx] += (end_seg - start_seg)
                     
                     except simpy.Interrupt:
-                        # durch FAIL_START unterbrochen
+                        # interrupted by FAIL_START
                         delta = self.env.now - t_before
                         proc_busy += max(delta, 0.0)
                         remaining = max(remaining - delta, 0.0)
                         
-                        # auch hier Busy nur nach Warm-up zählen
+                        # Here, too, count “Busy” only after the warm-up
                         start_seg = max(t_before, self.warmup_min)
                         end_seg   = self.env.now
                         if end_seg > start_seg:
                             self._busy_time[idx] += (end_seg - start_seg)
                         
-                        # warten bis repariert (m.is_up wird im failure_process True)
+                        # wait until repaired (m.is_up becomes True in the failure_process)
                         while not m.is_up:
                             yield self.env.timeout(0.1)
-                        # loop setzt fort
+                        # loop continues
 
                 j.end_times.append(self.env.now)
                 self.logs["events"].append({"time": self.env.now, "event": "end",
@@ -688,7 +675,6 @@ class FlowShop3:
 
     
     def _hold_for(self, dt):
-        # kleiner Helper, damit wir einen Prozess-Handle haben, den wir interrupten können
         yield self.env.timeout(dt)
     
     
@@ -706,14 +692,13 @@ class FlowShop3:
     def machine_availability_est(self, idx):
         down = self._down_minutes[idx]
         if self._down_start[idx] is not None:
-            down += (self.env.now - self._down_start[idx])  # laufender Down
+            down += (self.env.now - self._down_start[idx])  
         sim_t = max(self.env.now, 1e-9)
         return max(0.0, 1.0 - down / sim_t)
 
     def time_since_last_fail(self, idx):
         last = self._last_fail_end[idx]
         return self.env.now - last if last > 0 else 0.0
-
 
     def run(self, horizon_h=50, warmup_h=10):
         self.warmup_min = warmup_h * 60
@@ -722,7 +707,7 @@ class FlowShop3:
         bn = self._bn_index()
         m_bn = int(self.cfg["shop"].get("bn_servers", 1))
         sim_t = max(1e-9, self.env.now)
-        busy_bn = self._busy_time[bn]                 # <- richtige Busy-Zeit-Quelle
+        busy_bn = self._busy_time[bn]                
         rho_realized = busy_bn / (sim_t * m_bn)
         self.logs.setdefault("meta", []).append({"rho_realized_bn": rho_realized})
         print(f"[END] realized ρ_BN = {rho_realized:.3f}")
@@ -747,20 +732,17 @@ class FlowShop3:
         if not df_job.empty: df_job.to_csv(out_dir / "job_log.csv", index=False)
         if not df_evt.empty: df_evt.to_csv(out_dir / "event_log.csv", index=False)
         if not df_sc.empty:  df_sc.to_csv(out_dir / "policy_scores.csv", index=False)
-        # ML-Datensatz exportieren
+        # Export ML dataset
         df_ml = pd.DataFrame(self.logs.get("ml_rows", []))
         if not df_ml.empty:
             df_ml.to_csv(out_dir / "ml_dataset.csv", index=False)
 
-
-        # --- Keine Jobs? ---
         if df_job.empty:
             return {"n": 0, "on_time_rate": 0.0, "ct_mean": 0.0, "wip_avg": 0.0, "wip_max": 0}
 
-        # --- Warm-up schneidenT
         df = df_job[df_job["release"] >= warmup_h*60]
 
-        # --- WIP (zeitgewichteter Mittelwert) ---
+        # --- WIP (time-weighted average) ---
         def _avg_wip(timeline, t0, t1):
             if timeline[-1][0] < t1:
                 timeline = timeline + [(t1, timeline[-1][1])]
@@ -780,11 +762,11 @@ class FlowShop3:
         wip_pool_max = max(w for t, w in self._pool_timeline if t >= T0) if self._pool_timeline else 0
 
         
-        # --- WIP nur während aktiver Zeit (on_floor > 0) ---
+        # --- WIP only during active time (on_floor > 0) ---
         def _busy_stats(timeline, t0, t1):
             if not timeline:
                 return 0.0, 0.0
-            # Timeline an Fenster anpassen
+            # Fit the timeline to the window
             if timeline[0][0] > t0:
                 timeline = [(t0, timeline[0][1])] + timeline
             if timeline[-1][0] < t1:
@@ -795,7 +777,7 @@ class FlowShop3:
                 a = max(ta, t0); b = min(tb, t1)
                 if b <= a:
                     continue
-                if wa > 0:  # nur aktive Abschnitte zählen
+                if wa > 0:  # Only active sections count
                     area_busy += (b - a) * wa
                     busy_time += (b - a)
             wip_avg_busy = area_busy / max(busy_time, 1e-9)
@@ -803,26 +785,26 @@ class FlowShop3:
 
         wip_avg_busy, busy_minutes = _busy_stats(self._wip_timeline, T0, T1)
 
-        # --- optionale Zusatz-KPIs ---
+        # optional KPIs
         eff_minutes = max(T1 - T0, 1e-9)
         n_eff = len(df)
         throughput_per_min = n_eff / eff_minutes if eff_minutes > 0 else 0.0
 
-        # Perzentile
+        # percentile
         ct_p50 = float(df["ct"].median()) if n_eff > 0 else 0.0
         ct_p95 = float(df["ct"].quantile(0.95)) if n_eff > 0 else 0.0
         tard_p95 = float(df["tardiness"].quantile(0.95)) if n_eff > 0 else 0.0
 
-        # Utilization je Maschine (Busy-Zeit / Fenster)
+        # Utilization per machine (busy time / window)
         util_m = [bt / eff_minutes for bt in self._busy_time]
 
-        # --- Störungs-KPIs ---
+        # --- disturbance KPIs ---
         sim_t = max(1e-9, self.env.now)
         fails_m = self._fail_counts
         down_m  = self._down_minutes
         avail_m = [max(0.0, 1.0 - (down / sim_t)) for down in down_m]
         mttr_real = [(down / f) if f > 0 else 0.0 for down, f in zip(down_m, fails_m)]
-        # grobe MTTF-Schätzung: (Uptime)/(#Fails)
+      
         uptime_m = [sim_t - down for down in down_m]
         mttf_real = [(up / f) if f > 0 else 0.0 for up, f in zip(uptime_m, fails_m)]
         fails_total = int(sum(fails_m))
@@ -867,7 +849,6 @@ def run_pilot(cfg_path="cfg/base.yaml", seed=42):
     cfg = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
     set_seeds(seed)
 
-    # cv ggf. auf 3er-Liste heben (nur relevant für Generator)
     pt = cfg.get("processing_times", {})
     cv = pt.get("cv", None)
     if cv is not None and isinstance(cv, (int, float)):
@@ -878,10 +859,10 @@ def run_pilot(cfg_path="cfg/base.yaml", seed=42):
     horizon_h = sim_cfg.get("horizon_hours", 50)
     warmup_h = sim_cfg.get("warmup_hours", 10)
 
-    # Shop bauen (hier wird Cap berechnet, das brauchen wir für den Pfad)
+    # build shop 
     shop = FlowShop3(cfg)
 
-    # -------- NEU: eindeutiges Output-Verzeichnis pro Run --------
+    # ------- A unique output directory for each run --------
     out_root = cfg.get("logging", {}).get("out_root", "runs")
     rho = float(cfg.get("arrival", {}).get("rho_levels", [0.95])[0])
     due = str(cfg.get("scenario", {}).get("due", "mittel"))
@@ -895,17 +876,15 @@ def run_pilot(cfg_path="cfg/base.yaml", seed=42):
     policy = cfg.get("policies", {}).get("heuristics", ["SPT"])[0]
     run_id  = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Klarer Cap-Ordnername in Minuten am BN
+    # Clear Cap folder name in minutes at BN
     run_dir = (Path(out_root) / ds / policy /
                 f"capBN{cap_bn_min}min" / f"seed{seed}" / run_id)
 
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) Shop schreibt in den Run-Ordner (Archiv)
     shop.cfg.setdefault("logging", {})["out_dir"] = str(run_dir)
     print(f"[OUT] Writing results to: {run_dir}")
-    # -------------------------------------------------------------
-
+  
     res = shop.run(horizon_h=horizon_h, warmup_h=warmup_h)
 
     shop.logs.setdefault("meta", []).append({
@@ -913,8 +892,7 @@ def run_pilot(cfg_path="cfg/base.yaml", seed=42):
     "cap_bn_minutes": cap_bn_min, "policy": policy, "seed": seed
     })
 
-
-    import json, shutil  # oben in diesem Block sicherstellen
+    import json, shutil
 
     (Path(run_dir) / "kpi_summary.json").write_text(json.dumps(res, indent=2))
     (Path(run_dir) / "cfg_snapshot.yaml").write_text(
@@ -923,11 +901,11 @@ def run_pilot(cfg_path="cfg/base.yaml", seed=42):
 
     latest = Path("out")
     latest.mkdir(exist_ok=True)
-    shutil.copytree(run_dir, latest, dirs_exist_ok=True)  # überschreibt Dateien
+    shutil.copytree(run_dir, latest, dirs_exist_ok=True)  # overwrites files
     print(f"[OUT] Mirrored latest results to: {latest} (overwrite)")
 
 
-    # Optional: Symlink statt Kopie (unter Linux/Mac; Windows braucht Rechte)
+    # Symlink 
     try:
         latest_link = Path(out_root) / "latest"
         if latest_link.is_symlink() or latest_link.exists():
@@ -935,7 +913,7 @@ def run_pilot(cfg_path="cfg/base.yaml", seed=42):
         latest_link.symlink_to(run_dir, target_is_directory=True)
         print(f"[OUT] Symlink created: {latest_link} -> {run_dir}")
     except Exception as e:
-        # Fallback ist die Kopie nach ./out (oben)
+        # The fallback is the copy in ./out
         pass
 
     return res
