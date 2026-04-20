@@ -16,7 +16,7 @@ The simulation environment is used for two purposes:
 1. to generate training data from heuristic runs
 2. to evaluate the trained ML dispatcher against the heuristic benchmarks under identical scenario conditions
 
-### Research Context
+## Research Context
 
 The project studies scheduling decisions in a dynamic production system with:
 
