@@ -10,8 +10,8 @@ P_PARQ = Path("out/ml_dataset_labeled.parquet")
 P_CSV  = Path("out/ml_dataset_labeled.csv")
 df = pd.read_parquet(P_PARQ) if P_PARQ.exists() else pd.read_csv(P_CSV)
 
-# ---- Ziel & Features
-target = "y_tard"   # <--- HIER ANDERS
+# ---- Target & Features
+target = "y_tard"
 features = [
     "machine","p_i","rest_from_i","rest_downstream","slack","age",
     "queue_len_m","q_len_total","on_floor","wip_cap","tau","phi",
@@ -52,7 +52,6 @@ mae = mean_absolute_error(yte, pred)
 r2  = r2_score(yte, pred)
 print(f"[y_tard] MAE={mae:.2f}  R2={r2:.3f}  (best_params={search.best_params_})")
 
-# anderes Modellfile:
 MODELS = Path("models"); MODELS.mkdir(parents=True, exist_ok=True)
 joblib.dump({"model": model, "features": features}, MODELS / "model_tard.pkl")
 print("[OK] models/model_tard.pkl")
