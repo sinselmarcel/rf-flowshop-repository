@@ -14,14 +14,14 @@ def main():
     ap.add_argument("--cfg", default="cfg/base.yaml")
     ap.add_argument("--policies", default="SPT,EDD,ATC,ML")
     ap.add_argument("--due", default="eng,weit")
-    ap.add_argument("--dist", default="low,high")      # ggf: off,low,high
+    ap.add_argument("--dist", default="low,high")      
     ap.add_argument("--K", default="3,5")
     ap.add_argument("--rho", default="0.95")
-    ap.add_argument("--wlc", default="on,off")         # on,off oder nur on
-    ap.add_argument("--seeds", default="test")         # train|test|all oder "1,2,3"
+    ap.add_argument("--wlc", default="on,off")        
+    ap.add_argument("--seeds", default="test")        
     ap.add_argument("--out-on", default="runs")
-    ap.add_argument("--out-off", default="runs_nowlc") # trennt WLC-off sauber ab
-    ap.add_argument("--quiet", action="store_true")    # verbose/max_print aus
+    ap.add_argument("--out-off", default="runs_nowlc")
+    ap.add_argument("--quiet", action="store_true")    
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -41,10 +41,10 @@ def main():
     else:
         seeds = [int(x) for x in parse_csv_list(args.seeds)]
 
-    # ML-Modelle checken (sonst ML überspringen)
+    # Check ML models 
     have_ml = Path("models/model_rct.pkl").exists() and Path("models/model_tard.pkl").exists()
     if "ML" in policies and not have_ml:
-        print("[WARN] ML gewählt, aber models/model_rct.pkl oder model_tard.pkl fehlt -> ML wird übersprungen.")
+        print("[WARN] ML selected, but models/model_rct.pkl or model_tard.pkl is missing -> ML is skipped.")
         policies = [p for p in policies if p != "ML"]
 
     base_cfg = yaml.safe_load(Path(args.cfg).read_text(encoding="utf-8"))
@@ -56,7 +56,7 @@ def main():
     print(f"[PLAN] Runs: {len(combos)}")
 
     for (wlc, rho, due, K, dist, pol, seed) in combos:
-        cfg = dict(base_cfg)  # shallow copy ok, wir setzen darunter neu
+        cfg = dict(base_cfg)  # Shallow copy—okay, let's start over
         cfg.setdefault("arrival", {})["rho_levels"] = [rho]
         cfg.setdefault("scenario", {})["due"] = due
         cfg["scenario"]["dist"] = dist
@@ -77,7 +77,7 @@ def main():
         else:
             subprocess.run(cmd, check=True)
 
-    print("[OK] Fertig.")
+    print("[OK] finished.")
 
 if __name__ == "__main__":
     main()
