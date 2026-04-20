@@ -9,12 +9,12 @@ This repository contains the Python code used to simulate and evaluate dispatchi
 - SPT
 - EDD
 - ATC
-- ML (RF) (Random Forest-based dispatcher)
+- ML (Random Forest-based dispatcher)
 
 The simulation environment is used for two purposes:
 
-1. to generate training data from heuristic runs
-2. to evaluate the trained ML dispatcher against the heuristic benchmarks under identical scenario conditions
+1. To generate training data from heuristic runs
+2. To evaluate the trained ML dispatcher against the heuristic benchmarks under identical scenario conditions
 
 ## Research Context
 
@@ -84,9 +84,95 @@ The project is written in Python and uses the following main packages:
 - joblib
 - pyarrow
 
-You can install the dependencies with:
+## Installation
+
+Install the required Python packages with:
 
 ```bash
 pip install numpy pandas pyyaml simpy scikit-learn joblib pyarrow
+````
 
+A recent Python 3 version is recommended, such as Python 3.10 or newer.
 
+## Seed Split
+
+The project uses separate seed sets for model training and benchmark evaluation.
+
+**Training seeds:**
+42, 73, 99, 111, 808, 1337, 2025, 2601, 2718, 31415
+
+**Test seeds:**
+222, 333, 444, 555, 666, 777, 888, 999, 1212, 1717
+
+This separation is used to avoid information leakage between model training and evaluation.
+
+## Typical Workflow
+
+A typical workflow consists of the following steps.
+
+### 1. Run a single pilot simulation
+
+```bash
+python run_pilot.py --cfg base.yaml --policy SPT --seed 222
+```
+
+### 2. Run the full experiment grid
+
+```bash
+python run_grid.py --cfg base.yaml --seeds test
+```
+
+### 3. Collect run outputs
+
+```bash
+python collect_runs.py --runs-dir runs
+```
+
+### 4. Generate labeled ML data
+
+```bash
+python label_make.py
+```
+
+### 5. Train the Random Forest models
+
+```bash
+python train_rct.py
+python train_tard.py
+```
+
+### 6. Generate KPI summaries
+
+```bash
+python quick_summary.py --runs_dir runs --subset test
+```
+
+## Output Structure
+
+Typical output folders used during execution include:
+
+* `runs/`
+* `runs_nowlc/`
+* `out/`
+* `models/`
+
+These folders are usually generated during the simulation and ML workflow and are not required as part of the core repository code.
+
+## Reproducibility
+
+To reproduce results consistently, keep the following fixed:
+
+* the configuration file
+* the seed split
+* the scenario combinations
+* the feature definitions
+* the model training procedure
+* the evaluation workflow
+
+The repository is intended to document the simulation and evaluation pipeline underlying the comparative analysis of heuristic and ML-based dispatching rules.
+
+## Notes
+
+* The repository currently contains the core scripts and configuration needed for the simulation and ML workflow.
+* Large generated outputs, trained models, and local experiment folders are intentionally not included by default.
+* The repository is intended to document the code base and experimental pipeline rather than to store raw result data.
