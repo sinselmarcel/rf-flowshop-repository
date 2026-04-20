@@ -11,18 +11,18 @@ def find_first(paths):
 def main():
     out_dir = Path("out"); out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- Inputs finden ----
+    # ---- Find Input ----
     ds_path = find_first(["out/ml_dataset.csv"])
     if not ds_path:
-        raise FileNotFoundError("ml_dataset*.csv nicht gefunden in out/")
+        raise FileNotFoundError("ml_dataset*.csv not found in out/")
     dfx = pd.read_csv(ds_path)
 
     job_path = find_first(["out/job.csv", "out/jobs.csv", "out/job_log.csv"])
     if not job_path:
-        raise FileNotFoundError("Job-Log (job*.csv) nicht gefunden in out/")
+        raise FileNotFoundError("Job-Log (job*.csv) not found in out/")
     dfj = pd.read_csv(job_path)
 
-    # --- Kompatibilität: completion/release/job_id angleichen ---
+    # --- Compatibility: Align completion/release/job_id ---
     if "t_done" not in dfj.columns and "completion" in dfj.columns:
         dfj = dfj.rename(columns={"completion": "t_done"})
     if "t_release" not in dfj.columns and "release" in dfj.columns:
@@ -32,36 +32,36 @@ def main():
 
     # ---- Label y_rct, y_tard, y_late ----
 
-    # falls die Spalte anders heißt (z.B. 'due_date'), hier anpassen:
+    # If the column has a different name (e.g., ‘due_date’), adjust it here:
     if "due" not in dfj.columns and "due_date" in dfj.columns:
         dfj = dfj.rename(columns={"due_date": "due"})
 
-    # WICHTIG: run_id + job_id, sonst Zeilen-Vervielfachung
+    # IMPORTANT: run_id + job_id, otherwise duplicate rows
     comp = dfj[["run_id", "job_id", "t_done"]].drop_duplicates()
 
-    # Job-ID an ml_dataset angleichen
+    # Align the job ID with ml_dataset
     dfx = dfx.rename(columns={"job": "job_id"}) if "job_id" not in dfx.columns and "job" in dfx.columns else dfx
     if "time" not in dfx.columns:
-        raise KeyError("Spalte 'time' (Entscheidungszeit) fehlt in ml_dataset.csv")
+        raise KeyError("The ‘time’ column (decision time) is missing from ml_dataset.csv")
     if "due_minus_now" not in dfx.columns:
-        raise KeyError("Spalte 'due_minus_now' fehlt in ml_dataset.csv")
+        raise KeyError("The ‘due_minus_now’ column is missing from ml_dataset.csv")
 
-    # Merge job-Fertigstellungszeiten hinein
+    # Include merge job completion times
     dfx = dfx.merge(comp, on=["run_id", "job_id"], how="left")
 
-    # Restdurchlaufzeit (ab Entscheidungszeit)
+    # Remaining cycle time (from the decision time)
     dfx["y_rct"] = (dfx["t_done"] - dfx["time"]).astype("float32")
 
-    # Absolutes Due Date aus time + due_minus_now
+    # Absolute due date calculated as time + due_minus_now
     dfx["due"] = dfx["time"] + dfx["due_minus_now"]
 
-    # Tardiness = max(0, Fertigstellung - Due Date)
+    # Tardiness = max(0, Completion - Due Date)
     dfx["y_tard"] = (dfx["t_done"] - dfx["due"]).clip(lower=0.0).astype("float32")
 
-    # Hilfsspalten wieder weg
+    # Hide auxiliary columns
     dfx = dfx.drop(columns=["t_done", "due"])
 
-    # --- Szenario-Features numerisch kodieren ---
+    # --- Encode scenario features numerically ---
     if "scenario_due" in dfx.columns:
         dfx["due_tight"] = dfx["scenario_due"].map({"eng": 1, "weit": 0}).astype("int8")
 
@@ -72,7 +72,7 @@ def main():
         if col in dfx.columns:
             dfx[col] = dfx[col].astype("float32")
 
-    # --- phi & Rest-Infos wie bisher ---
+    # --- phi & other information as before ---
     k_atc = 2.0
 
     if "tau" not in dfx.columns:
@@ -86,7 +86,7 @@ def main():
     dfx["rest_downstream"] = dfx["rest_from_i"] - dfx["p_i"]
 
 
-    # ---- Spaltenauswahl (schlank!) ----
+    # ---- Column selection ----
     keep = [
         "run_id","decision_id","time","job_id","machine",
         "p_i","rest_from_i","rest_downstream","slack","age",
@@ -101,7 +101,7 @@ def main():
     dfx = dfx[keep]
 
 
-    # ---- Downcast für kleinere Dateien ----
+    # ---- Downcast for smaller files ----
     dfx["machine"] = dfx["machine"].astype("int8")
     for c in ["p_i","rest_from_i","rest_downstream","slack","age",
           "tau","phi","y_rct","y_tard","rho_set","K","bn_workload_now"]:
@@ -112,16 +112,15 @@ def main():
         if c in dfx.columns:
             dfx[c] = dfx[c].astype("int16")
 
-    # ---- Speichern + Log ----
+    # ---- Save + Log ----
     out_path_parq = out_dir / "ml_dataset_labeled.parquet"
     out_path_csv  = out_dir / "ml_dataset_labeled.csv"
 
     try:
-        import pyarrow  # nur um klaren Fehler zu bekommen, falls nicht installiert
+        import pyarrow
         dfx.to_parquet(out_path_parq, index=False)
         print(f"[OK] {out_path_parq} rows={len(dfx):,}")
     except Exception as e:
-        # Fallback auf CSV (kein Parquet-Engine installiert o.ä.)
         dfx.to_csv(out_path_csv, index=False)
         print(f"[OK] {out_path_csv} rows={len(dfx):,}  [Parquet fallback: {e.__class__.__name__}]")
 
