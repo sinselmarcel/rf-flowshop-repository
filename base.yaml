@@ -1,23 +1,23 @@
 shop:
-  bottleneck_machine: 2          # M2 als Engpass
+  bottleneck_machine: 2          # M2 as bottleneck 
 
 mode:
-  run: "generator"               # Generator = koninuierliche Ankünfte neuer Aufträge
+  run: "generator"               # generator = continous order arrivals
 
 arrival:
-  rho_levels: [0.95]       # durchschnittliche Auslastung am Bn
+  rho_levels: [0.95]       # average utilization rate at bn
 
 processing_times:
-  dist: "gamma"                  # zieht Zufalls-Bearbeitungszeiten
-  mean: [51, 59, 54]                # M1, M2, M3 (Minuten)
-  cv:   [0.5, 0.5, 0.5]          # Variationskoeffizienten (Std/Mean)
+  dist: "gamma"                  # generates random processing time
+  mean: [51, 59, 54]                # M1, M2, M3 (min)
+  cv:   [0.5, 0.5, 0.5]          # Coefficients of variation (h/mean)
 
 scenario:
-  due: "weit"        # "eng" oder "weit"
+  due: "weit"        # "eng" (tight) or "weit" (loose)
   dist: "high"          # "off" - "low" - "high"
 
 disturbances:
-  enabled: true        # globaler Schalter
+  enabled: true        # global switch dist
   breakdowns:
     low:  { mttf: 240, mttr: 10 }
     high: { mttf: 120, mttr: 20 }
@@ -30,7 +30,7 @@ wlc:
   enabled: true
   mode: "workload"      
   norm: { K: 3 }   # 3/5 WLC Cap
-  pool_rule: "FIFO"     # neutral – Heuristik entscheidet an der Maschine
+  pool_rule: "FIFO"     # neutral – Heuristics determine the machine's behavior
   topup_period: 0.5
  
 policies:
@@ -47,5 +47,5 @@ logging:
   queue_snapshots: true
   policy_scores: true
   out_dir: "out"
-  verbose: true        # drucke Entscheidungen ins Terminal
-  max_print: 5        # wie viele Entscheidungen anzeigen
+  verbose: true       
+  max_print: 5        
