@@ -110,38 +110,38 @@ This separation is used to avoid information leakage between model training and 
 
 A typical workflow consists of the following steps.
 
-### 1. Run a single pilot simulation
+### 1. Run training scenarios
 
 ```bash
-python run_pilot.py --cfg base.yaml --policy SPT --seed 222
+python run_grid.py --cfg base.yaml --seeds train
 ```
 
-### 2. Run the full experiment grid
-
-```bash
-python run_grid.py --cfg base.yaml --seeds test
-```
-
-### 3. Collect run outputs
+### 2. Collect training run outputs
 
 ```bash
 python collect_runs.py --runs-dir runs
 ```
 
-### 4. Generate labeled ML data
+### 3. Generate labeled ML data
 
 ```bash
 python label_make.py
 ```
 
-### 5. Train the Random Forest models
+### 4. Train the Random Forest models
 
 ```bash
 python train_rct.py
 python train_tard.py
 ```
 
-### 6. Generate KPI summaries
+### 5. Run evaluation scenarios
+
+```bash
+python run_grid.py --cfg base.yaml --seeds test
+```
+
+### 6. Generate KPI summaries for evaluation
 
 ```bash
 python quick_summary.py --runs_dir runs --subset test
