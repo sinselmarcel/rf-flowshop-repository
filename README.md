@@ -113,7 +113,7 @@ A typical workflow consists of the following steps.
 ### 1. Run training scenarios
 
 ```bash
-python run_grid.py --cfg base.yaml --seeds train
+python run_grid.py --cfg base.yaml --policies SPT,EDD,ATC --seeds train
 ```
 
 ### 2. Collect training run outputs
